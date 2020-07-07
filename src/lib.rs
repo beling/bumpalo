@@ -341,6 +341,14 @@ fn allocation_size_overflow<T>() -> T {
     panic!("requested allocation size overflowed")
 }
 
+
+/// watermark
+#[derive(Debug)]
+pub struct BumpResetMark {
+    footer: NonNull<ChunkFooter>,
+    ptr: NonNull<u8>,
+}
+
 impl Bump {
     /// Construct a new arena to bump allocate into.
     ///
@@ -542,6 +550,31 @@ impl Bump {
                 self.current_chunk_footer.get().cast(),
                 "Our chunk's bump finger should be reset to the start of its allocation"
             );
+        }
+    }
+
+    /// current watermark, (footer, footer.ptr)
+    pub fn get_reset_mark(&mut self) -> BumpResetMark {
+        unsafe {
+            let footer = self.current_chunk_footer.get();
+            BumpResetMark { footer, ptr: footer.as_ref().ptr.get() }
+        }
+    }
+
+    /// reset_to_watermark
+    pub fn reset_to_mark(&mut self, watermark: BumpResetMark) {
+        unsafe {
+            let mut curr_chunk = self.current_chunk_footer.get();
+
+            // Deallocate all chunks except the saved one
+            while curr_chunk != watermark.footer {
+                let prev = curr_chunk.as_ref().prev.get().expect("prev chunk expected in watermark reset");
+                dealloc(curr_chunk.as_ref().data.as_ptr(), curr_chunk.as_ref().layout);
+                curr_chunk = prev;
+            }
+
+            // Reset the bump finger to the end of the chunk.
+            curr_chunk.as_ref().ptr.set(watermark.ptr);
         }
     }
 
