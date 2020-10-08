@@ -349,6 +349,14 @@ fn allocation_size_overflow<T>() -> T {
     panic!("requested allocation size overflowed")
 }
 
+
+/// watermark
+#[derive(Debug)]
+pub struct BumpResetMark {
+    footer: NonNull<ChunkFooter>,
+    ptr: NonNull<u8>,
+}
+
 impl Bump {
     /// Construct a new arena to bump allocate into.
     ///
@@ -550,6 +558,35 @@ impl Bump {
                 self.current_chunk_footer.get().cast(),
                 "Our chunk's bump finger should be reset to the start of its allocation"
             );
+        }
+    }
+
+    /// current state, (footer, footer.ptr)
+    pub fn get_reset_mark(&mut self) -> BumpResetMark {
+        unsafe {
+            let footer = self.current_chunk_footer.get();
+            BumpResetMark { footer, ptr: footer.as_ref().ptr.get() }
+        }
+    }
+
+    /// reset_to_mark
+    pub fn reset_to_mark(&mut self, state_mark: BumpResetMark) -> Result<(), &'static str> {
+        unsafe {
+            let mut curr_footer = self.current_chunk_footer.get();
+
+            while curr_footer != state_mark.footer {
+                let prev = curr_footer.as_ref().prev.get().expect("prev chunk expected in watermark reset");
+                dealloc(curr_footer.as_ref().data.as_ptr(), curr_footer.as_ref().layout);
+                curr_footer = prev;
+                self.current_chunk_footer.set(curr_footer);
+            }
+
+            if (curr_footer.as_ref().ptr.get().as_ptr() as usize) > (state_mark.ptr.as_ptr() as usize) {
+                Err("reset_to_mark, can't reset mark to lower value, probably wrong order of stacked drops")
+            } else {
+                curr_footer.as_ref().ptr.set(state_mark.ptr);
+                Ok(())
+            }
         }
     }
 
